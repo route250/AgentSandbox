@@ -80,7 +80,7 @@ def read_runtime(image_id: str) -> dict | None:
 
 
 def write_runtime(image_id: str, runtime: dict) -> None:
-    RUNTIME_DIR.mkdir(exist_ok=True)
+    RUNTIME_DIR.mkdir(exist_ok=True,parents=True)
     path = runtime_path(image_id)
     temporary = path.with_suffix(".tmp")
     temporary.write_text(json.dumps(runtime, ensure_ascii=False))
@@ -111,7 +111,7 @@ def connection_path(image_id: str) -> Path:
 
 @contextmanager
 def connection_guard(image_id: str):
-    RUNTIME_DIR.mkdir(exist_ok=True)
+    RUNTIME_DIR.mkdir(exist_ok=True,parents=True)
     lock_path = RUNTIME_DIR / f"{image_id}.connection.lock"
     with lock_path.open("a+") as lock_file:
         fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
@@ -417,7 +417,7 @@ def start_image(image_id: str) -> dict:
     port = free_port()
     LOGS_DIR.mkdir(exist_ok=True)
     work_dir = RUNTIME_DIR / f"{image_id}"
-    work_dir.mkdir(exist_ok=True)
+    work_dir.mkdir(exist_ok=True,parents=True)
     with (LOGS_DIR / f"{image_id}.log").open("ab") as log_file:
         process = subprocess.Popen([str(START_SCRIPT), "--id", image_id, "--port", str(port)], cwd=work_dir, stdout=log_file, stderr=subprocess.STDOUT)
     write_runtime(image_id, {"pid": process.pid, "port": port, "started_at": datetime.now(timezone.utc).isoformat()})

@@ -17,5 +17,5 @@
 - Increment the static asset query version in `static/index.html` when changing cached CSS or JavaScript.
 
 ## Running locally
-- Start the manager with `.venv/bin/uvicorn app:app --host 127.0.0.1 --port 3000` from the repository root.
+- Start the manager with `./scripts/run-app.sh` from the repository root. The default manager port is `3013`; set `MANAGER_PORT` to override it.
 - The standalone sandbox launcher is `./scripts/image-cli.sh --id <image-id> --port <port>`.
