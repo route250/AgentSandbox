@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#f7f8fa">
+    <title>Agent Sandbox</title>
+    <link rel="stylesheet" href="/manager/static/styles.css?v=4">
+  </head>
+  <body>
+    <header class="topbar">
+      <button id="sidebar-toggle" class="icon-button menu-toggle" type="button" aria-label="左メニューを閉じる" aria-expanded="true" title="左メニューを閉じる">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+      </button>
+      <a class="brand" href="/manager/" aria-label="Agent Sandbox ホーム">Agent Sandbox</a>
+      <span class="topbar-divider" aria-hidden="true"></span>
+      <h1 id="page-title" class="page-title">新規作成</h1>
+    </header>
+
+    <div class="app-layout">
+      <aside id="sidebar" class="sidebar" aria-label="メインメニュー">
+        <nav class="menu-list" aria-label="ページ">
+          <button id="create-nav" class="menu-item active" type="button" aria-current="page">
+            <span class="menu-icon create-icon" aria-hidden="true">＋</span>
+            <span class="menu-label">新規作成</span>
+          </button>
+        </nav>
+        <div class="sidebar-section">
+          <div class="section-heading"><span>イメージ</span><span id="image-count" class="count-badge">0</span></div>
+          <nav id="images" class="image-list" aria-label="イメージ一覧" aria-live="polite"></nav>
+          <p id="images-empty" class="sidebar-empty">イメージはまだありません</p>
+        </div>
+        <div class="sidebar-footer">Agent Sandbox</div>
+      </aside>
+
+      <main class="main-content">
+        <section id="create-view" class="create-view" aria-labelledby="create-heading">
+          <div class="content-wrap">
+            <div class="intro-block">
+              <span class="eyebrow">SANDBOX</span>
+              <h2 id="create-heading">新しいイメージを作成</h2>
+              <p>作業環境となるイメージを作成します。</p>
+            </div>
+            <form id="create-form" class="create-form">
+              <div class="field-group">
+                <label for="image-id">イメージ名 <span class="optional">任意</span></label>
+                <input id="image-id" name="image-id" maxlength="64" pattern="[A-Za-z0-9][A-Za-z0-9_-]{0,63}" placeholder="例: project-a" autocomplete="off" aria-describedby="image-id-help">
+                <span id="image-id-help" class="field-help">英数字、ハイフン、アンダースコアを使用できます。空欄の場合は名前を自動で作成します。</span>
+              </div>
+              <div id="form-error" class="form-error" role="alert" hidden></div>
+              <div class="form-actions">
+                <button id="cancel-create" class="button-secondary" type="button">キャンセル</button>
+                <button id="submit-create" class="button-primary" type="submit"><span class="button-plus" aria-hidden="true">＋</span>作成</button>
+              </div>
+            </form>
+          </div>
+        </section>
+        <section id="image-view" class="image-view" hidden aria-label="選択中のイメージ">
+          <div id="image-notice" class="image-notice" hidden></div>
+          <iframe id="opencode-frame" title="OpenCode" hidden></iframe>
+        </section>
+      </main>
+    </div>
+
+    <template id="image-template">
+      <div class="image-row">
+        <button class="image-item" type="button">
+          <span class="image-dot" aria-hidden="true"></span>
+          <span class="image-name"></span>
+          <span class="status-label"></span>
+        </button>
+        <div class="image-actions"></div>
+      </div>
+    </template>
+    <script src="/manager/static/app.js?v=7"></script>
+  </body>
+</html>

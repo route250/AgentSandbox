@@ -1,0 +1,22 @@
+
+set -o vi
+export PS1="[${SBOX_ID:-sbox} \\W] \\$ "
+# if [ -z "$XDG_CONFIG_HOME" ]; then
+#     export XDG_CONFIG_HOME="$HOME/.config"
+# fi
+
+export RUST_LOG=error
+
+if [ -d "$HOME/.nvm" ]; then
+    export NVM_DIR="$HOME/.nvm"
+    # This loads nvm
+    [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+    # This loads nvm bash_completion
+    [ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"
+fi
+
+export TAVILY_API_KEY=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
+
+# opencode
+export PATH=/home/maeda/.opencode/bin:$PATH
+                                                 
