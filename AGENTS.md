@@ -3,7 +3,7 @@
 ## Project overview
 - FastAPI server code is in `app.py`.
 - The manager UI is plain HTML, CSS, and JavaScript in `static/`.
-- Runtime image data is stored under `images/` and `.runtime/`; do not modify or remove user image data as part of UI work.
+- Runtime image data is stored under `images/` and `tmp/runtime/`; do not modify or remove user image data as part of UI work.
 
 ## UI conventions
 - Keep the manager shell composed of a top menu bar, collapsible left menu, and main content area.
@@ -18,4 +18,4 @@
 
 ## Running locally
 - Start the manager with `.venv/bin/uvicorn app:app --host 127.0.0.1 --port 3000` from the repository root.
-- The standalone sandbox launcher is `./start.sh --id <image-id> --port <port>`.
+- The standalone sandbox launcher is `./scripts/image-cli.sh --id <image-id> --port <port>`.

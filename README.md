@@ -10,10 +10,10 @@ FastAPI の管理画面を起動する。
 
 画面で作成したイメージは `images/<image-id>/fs` に保存する。
 
-OpenCode の起動中メタデータとログは `.runtime/` に保存する。
+OpenCode の起動中メタデータとログは `tmp/runtime/` に保存する。
 
-`start.sh` は次の形式で単独起動にも使用できる。
+`image-cli.sh` は次の形式で単独起動にも使用できる。
 
 ```bash
-./start.sh --id <image-id> --port <port>
+./scripts/image-cli.sh --id <image-id> --port <port>
 ```

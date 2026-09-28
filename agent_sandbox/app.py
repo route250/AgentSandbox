@@ -24,10 +24,14 @@ from pydantic import BaseModel, Field
 from starlette.background import BackgroundTask
 from websockets.asyncio.client import connect as websocket_connect
 
-ROOT = Path(__file__).resolve().parent
-IMAGES_DIR = ROOT / "images"
-RUNTIME_DIR = ROOT / ".runtime"
-START_SCRIPT = ROOT / "start.sh"
+PKG_ROOT = Path(__file__).resolve().parent
+PRJ_ROOT = PKG_ROOT.parent
+TEMP_DIR = PRJ_ROOT / "tmp"
+LOGS_DIR = PRJ_ROOT / "logs"
+STATIC_DIR = PKG_ROOT / "static"
+IMAGES_DIR = PRJ_ROOT / "images"
+RUNTIME_DIR = TEMP_DIR / "runtime"
+START_SCRIPT = PRJ_ROOT / "scripts" / "image-cli.sh"
 IMAGE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 SESSION_ID = re.compile(r"^[A-Za-z0-9_-]{20,80}$")
 CONNECTION_LEASE_SECONDS = 45
@@ -35,7 +39,7 @@ SSE_KEEPALIVE_SECONDS = 15
 PORTS = range(18100, 18200)
 HOP_BY_HOP_HEADERS = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailers", "transfer-encoding", "upgrade"}
 app = FastAPI(title="OpenCode Sandbox Manager")
-app.mount("/manager/static", StaticFiles(directory=ROOT / "static"), name="static")
+app.mount("/manager/static", StaticFiles(directory=STATIC_DIR), name="static")
 proxy_client = httpx.AsyncClient(timeout=None, follow_redirects=False)
 SUBSCRIBERS: set[tuple[asyncio.AbstractEventLoop, asyncio.Queue, str]] = set()
 SUBSCRIBERS_LOCK = threading.Lock()
@@ -314,7 +318,7 @@ async def opencode_or_manager(request: Request):
 
 @app.get("/manager/", include_in_schema=False)
 def index() -> FileResponse:
-    return FileResponse(ROOT / "static" / "index.html")
+    return FileResponse( STATIC_DIR / "index.html")
 
 
 @app.get("/manager/api/images")
@@ -411,9 +415,11 @@ def start_image(image_id: str) -> dict:
     if is_running(runtime):
         return image_payload(image_id)
     port = free_port()
-    RUNTIME_DIR.mkdir(exist_ok=True)
-    with (RUNTIME_DIR / f"{image_id}.log").open("ab") as log_file:
-        process = subprocess.Popen([str(START_SCRIPT), "--id", image_id, "--port", str(port)], cwd=ROOT, stdout=log_file, stderr=subprocess.STDOUT)
+    LOGS_DIR.mkdir(exist_ok=True)
+    work_dir = RUNTIME_DIR / f"{image_id}"
+    work_dir.mkdir(exist_ok=True)
+    with (LOGS_DIR / f"{image_id}.log").open("ab") as log_file:
+        process = subprocess.Popen([str(START_SCRIPT), "--id", image_id, "--port", str(port)], cwd=work_dir, stdout=log_file, stderr=subprocess.STDOUT)
     write_runtime(image_id, {"pid": process.pid, "port": port, "started_at": datetime.now(timezone.utc).isoformat()})
     deadline = time.monotonic() + 10
     while time.monotonic() < deadline:
