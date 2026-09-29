@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import fcntl
+import hashlib
 import json
 import os
 import re
 import signal
+import shutil
 import socket
 import subprocess
 import threading
@@ -18,7 +20,7 @@ from urllib.parse import quote
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import FileResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.background import BackgroundTask
@@ -38,6 +40,27 @@ CONNECTION_LEASE_SECONDS = 45
 SSE_KEEPALIVE_SECONDS = 15
 PORTS = range(18100, 18200)
 HOP_BY_HOP_HEADERS = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailers", "transfer-encoding", "upgrade"}
+OPENCODE_DIGEST_MARKER = b"crypto.subtle.digest("
+OPENCODE_DIGEST_CALL = b"globalThis.__agentSandboxOpenCodeDigest("
+OPENCODE_DIGEST_SHIM = b"""\
+(() => {
+  globalThis.__agentSandboxOpenCodeDigest = async (algorithm, data) => {
+    if (algorithm !== "SHA-256") {
+      throw new Error("Unsupported digest algorithm: " + algorithm)
+    }
+    const response = await fetch("/__agent-sandbox/opencode/sha256", {
+      method: "POST",
+      headers: { "Content-Type": "application/octet-stream" },
+      credentials: "same-origin",
+      body: data,
+    })
+    if (!response.ok) {
+      throw new Error("SHA-256 proxy failed: " + response.status)
+    }
+    return response.arrayBuffer()
+  }
+})()
+"""
 app = FastAPI(title="OpenCode Sandbox Manager")
 app.mount("/manager/static", StaticFiles(directory=STATIC_DIR), name="static")
 proxy_client = httpx.AsyncClient(timeout=None, follow_redirects=False)
@@ -274,6 +297,19 @@ def proxy_port(image_id: str) -> int:
     return port
 
 
+def is_javascript_response(path: str, headers: httpx.Headers) -> bool:
+    """OpenCodeのJavaScript配信だけを中継時の修正対象として判定する。"""
+    content_type = headers.get("content-type", "").split(";", 1)[0].strip().lower()
+    return content_type in {"application/javascript", "text/javascript", "application/x-javascript"} or path.endswith(".js")
+
+
+def patch_opencode_javascript(body: bytes) -> bytes:
+    """非HTTPS環境で使えないcrypto.subtle.digestをSHA-256中継関数へ置換する。"""
+    if OPENCODE_DIGEST_MARKER not in body:
+        return body
+    return OPENCODE_DIGEST_SHIM + body.replace(OPENCODE_DIGEST_MARKER, OPENCODE_DIGEST_CALL)
+
+
 async def proxy_http(request: Request, image_id: str, path: str, *, session_id: str | None = None, select_image: bool = False):
     session_id = session_id or request.cookies.get("opencode_session")
     require_connection(image_id, session_id)
@@ -294,12 +330,26 @@ async def proxy_http(request: Request, image_id: str, path: str, *, session_id: 
     upstream_request = proxy_client.build_request(request.method, upstream_url, headers=headers, content=request.stream())
     upstream = await proxy_client.send(upstream_request, stream=True)
     response_headers = {key: value for key, value in upstream.headers.items() if key.lower() not in HOP_BY_HOP_HEADERS | {"set-cookie"}}
-    response = StreamingResponse(
-        upstream.aiter_raw(),
-        status_code=upstream.status_code,
-        headers=response_headers,
-        background=BackgroundTask(upstream.aclose),
-    )
+    if request.method != "HEAD" and is_javascript_response(path, upstream.headers):
+        # JSは書き換えるため一度読み込み、圧縮・長さのヘッダーを再利用しない。
+        body = await upstream.aread()
+        await upstream.aclose()
+        patched_body = patch_opencode_javascript(body)
+        if patched_body != body:
+            response_headers.pop("etag", None)
+            response_headers.pop("last-modified", None)
+            response_headers["cache-control"] = "no-store"
+        body = patched_body
+        response_headers.pop("content-length", None)
+        response_headers.pop("content-encoding", None)
+        response = Response(content=body, status_code=upstream.status_code, headers=response_headers)
+    else:
+        response = StreamingResponse(
+            upstream.aiter_raw(),
+            status_code=upstream.status_code,
+            headers=response_headers,
+            background=BackgroundTask(upstream.aclose),
+        )
     if select_image:
         response.set_cookie("opencode_image", image_id, path="/", httponly=True, samesite="lax")
         response.set_cookie("opencode_session", session_id, path="/", httponly=True, samesite="lax")
@@ -395,6 +445,17 @@ def connect_image(image_id: str, body: SessionRequest) -> dict:
     return result
 
 
+@app.post("/__agent-sandbox/opencode/sha256", include_in_schema=False)
+async def opencode_sha256(request: Request) -> Response:
+    """OpenCode Web UIのBlob ID用に、受信バイト列のSHA-256を返す。"""
+    image_id = request.cookies.get("opencode_image")
+    if not image_id:
+        raise HTTPException(404, "OpenCodeのイメージが選択されていません。")
+    require_connection(image_id, request.cookies.get("opencode_session"))
+    digest = hashlib.sha256(await request.body()).digest()
+    return Response(content=digest, media_type="application/octet-stream")
+
+
 @app.post("/manager/api/images/{image_id}/disconnect")
 def disconnect_image(image_id: str, body: SessionRequest) -> dict:
     validate_image_id(image_id)
@@ -421,7 +482,8 @@ def start_image(image_id: str) -> dict:
     with (LOGS_DIR / f"{image_id}.log").open("ab") as log_file:
         process = subprocess.Popen([str(START_SCRIPT), "--id", image_id, "--port", str(port)], cwd=work_dir, stdout=log_file, stderr=subprocess.STDOUT)
     write_runtime(image_id, {"pid": process.pid, "port": port, "started_at": datetime.now(timezone.utc).isoformat()})
-    deadline = time.monotonic() + 10
+    boot_timeout=90
+    deadline = time.monotonic() + boot_timeout
     while time.monotonic() < deadline:
         if not is_running(read_runtime(image_id)):
             runtime_path(image_id).unlink(missing_ok=True)
@@ -434,7 +496,7 @@ def start_image(image_id: str) -> dict:
         time.sleep(0.1)
     os.kill(process.pid, signal.SIGTERM)
     runtime_path(image_id).unlink(missing_ok=True)
-    raise HTTPException(504, "OpenCode は10秒以内に待受を開始しませんでした。")
+    raise HTTPException(504, f"OpenCode は{boot_timeout}秒以内に待受を開始しませんでした。")
 
 
 @app.post("/manager/api/images/{image_id}/stop")
@@ -461,6 +523,29 @@ def stop_image(image_id: str, body: SessionRequest | None = None) -> dict:
     result = image_payload(image_id)
     notify_image_status_changed()
     return result
+
+
+@app.delete("/manager/api/images/{image_id}")
+def delete_image(image_id: str) -> dict:
+    """停止中のイメージ本体と関連する実行状態を削除する。"""
+    validate_image_id(image_id)
+    image_dir = IMAGES_DIR / image_id
+    if image_id not in image_ids():
+        raise HTTPException(404, "イメージが見つかりません。")
+    with connection_guard(image_id):
+        connection = read_connection_unlocked(image_id)
+        if connection:
+            raise HTTPException(409, "接続中のイメージは削除できません。")
+        runtime = read_runtime(image_id)
+        if is_running(runtime):
+            raise HTTPException(409, "起動中のイメージは削除できません。停止してから削除してください。")
+        shutil.rmtree(image_dir)
+        runtime_path(image_id).unlink(missing_ok=True)
+        work_dir = RUNTIME_DIR / image_id
+        if work_dir.is_dir():
+            shutil.rmtree(work_dir)
+    notify_image_status_changed()
+    return {"id": image_id, "deleted": True}
 
 
 @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"], include_in_schema=False)

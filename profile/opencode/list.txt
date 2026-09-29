@@ -1,3 +1,0 @@
-ro .opencode/bin/opencode
-init .config/opencode/opencode.jsonc
-rw share

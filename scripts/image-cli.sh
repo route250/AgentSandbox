@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
+#
+# bwrapをつかったsandboxでプロセスを起動するツール
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")"/.. && pwd)"
 SBOX_ROOT="$PROJECT_DIR/images"
@@ -9,11 +11,17 @@ SBOX_ID=""
 SBOX_PORT=""
 CREATE=0
 
+# ------------------
+# help message
+# ------------------
 usage() {
   echo "Usage: $0 --id IMAGE_ID --port PORT [--create]" >&2
   exit 2
 }
 
+# ------------------
+# command line options
+# ------------------
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --id) SBOX_ID="${2:-}"; shift 2 ;;
@@ -32,14 +40,23 @@ if [[ ! -d "$SBOX_IMG" && "$CREATE" -ne 1 ]]; then
   exit 1
 fi
 
+# ------------------
+# check profile
+# ------------------
+PROF_DIR="$PROJECT_DIR/profile/$SBOX_PROF"
+[[ -d "$PROF_DIR" ]] || { echo "Profile not found: $SBOX_PROF" >&2; exit 1; }
+
+# ------------------
+# create image dir
+# ------------------
 mkdir -p "$SBOX_ROOT" "$SBOX_IMG"
 SBOX_FS="$SBOX_IMG/fs"
 mkdir -p "$SBOX_FS/.sbox"
 
-PROF_DIR="$PROJECT_DIR/profile/$SBOX_PROF"
-[[ -d "$PROF_DIR" ]] || { echo "Profile not found: $SBOX_PROF" >&2; exit 1; }
-chmod +x "$PROF_DIR/boot.sh"
 
+# ------------------
+# copy shell rcfiles
+# ------------------
 for src in /etc/skel/.*; do
   [[ -f "$src" ]] || continue
   name="$(basename "$src")"
@@ -49,28 +66,44 @@ for src in /etc/skel/.*; do
   [[ -f "$extra" ]] && cat "$extra" >> "$dst"
 done
 
+# ------------------
+# mount system dirs
+# ------------------
 BWRAP_OPT=(--tmpfs / --dev /dev --proc /proc --ro-bind /sys /sys --tmpfs /run --tmpfs /tmp --share-net)
 for d in /bin /sbin /etc /usr /lib /lib64 /var /run/systemd/resolve /run/dbus; do
   [[ -d "$d" ]] && BWRAP_OPT+=(--ro-bind "$d" "$d")
 done
 BWRAP_OPT+=(--bind "$SBOX_FS" "$HOME" --ro-bind "$SBOX_BASE/_sbox" "$HOME/.sbox")
 
-BWRAP_OPT+=(--ro-bind "$PROF_DIR/boot.sh" "$HOME/.boot.sh")
+# ------------------
+# mount profiles
+# ------------------
+if [[ -x "$PROF_DIR/boot.sh" ]]; then
+    chmod +x "$PROF_DIR/boot.sh"
+    BWRAP_OPT+=(--ro-bind "$PROF_DIR/boot.sh" "$HOME/.boot.sh")
+fi
 
-while read -r mode share_path; do
+while read -r mode share_path src_path; do
   [[ -n "$mode" ]] || continue
-  src="$PROF_DIR/$share_path"
+  [[ -n "$src_path" ]] || src_path="$PROF_DIR/$share_path"
+  [[ -e "$src_path" ]] || { echo "Profile path not found: $share_path $src_path" >&2; exit 1; }
   dst="$SBOX_FS/$share_path"
-  [[ -e "$src" ]] || { echo "Profile path not found: $share_path" >&2; exit 1; }
   mkdir -p "$(dirname "$dst")"
   case "$mode" in
-    ro) BWRAP_OPT+=(--ro-bind "$src" "$HOME/$share_path") ;;
-    rw) BWRAP_OPT+=(--bind "$src" "$HOME/$share_path") ;;
-    init) [[ -e "$dst" ]] || cp -a "$src" "$dst" ;;
+    ro) BWRAP_OPT+=(--ro-bind "$src_path" "$HOME/$share_path") ;;
+    rw) BWRAP_OPT+=(--bind "$src_path" "$HOME/$share_path") ;;
+    init) [[ -e "$dst" ]] || cp -a "$src_path" "$dst" ;;
     *) echo "Unknown profile mode: $mode" >&2; exit 1 ;;
   esac
-done < "$PROF_DIR/list.txt"
+done < <(sed 's/#.*$//' "$PROF_DIR/mount.cfg")
 
+# ------------------
+# environment
+# ------------------
 BWRAP_OPT+=(--setenv SBOX_ID "$SBOX_ID" --setenv SBOX_PORT "$SBOX_PORT")
-command=(bwrap "${BWRAP_OPT[@]}" --chdir "$HOME/share" /bin/bash --login "$HOME/.sbox/boot.sh")
+
+# ------------------
+# boot
+# ------------------
+command=(bwrap "${BWRAP_OPT[@]}" --chdir "$HOME" /bin/bash --login "$HOME/.sbox/boot.sh")
 exec "${command[@]}"

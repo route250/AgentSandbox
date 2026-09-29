@@ -10,4 +10,4 @@ if [[ ! -x "$VENV_DIR/bin/uvicorn" ]]; then
   exit 1
 fi
 
-exec "$VENV_DIR/bin/uvicorn" agent_sandbox.app:app --app-dir "$ROOT_DIR" --host 0.0.0.0 --port "$MANAGER_PORT" --reload
+exec "$VENV_DIR/bin/uvicorn" agent_sandbox.app:app --app-dir "$ROOT_DIR" --host 0.0.0.0 --port "$MANAGER_PORT" --reload 2>&1 | tee -a logs/sbox.log

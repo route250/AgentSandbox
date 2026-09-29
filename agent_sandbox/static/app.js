@@ -9,7 +9,7 @@ const submitCreate = document.querySelector('#submit-create');
 const createView = document.querySelector('#create-view');
 const imageView = document.querySelector('#image-view');
 const imageNotice = document.querySelector('#image-notice');
-const frame = document.querySelector('#opencode-frame');
+let frame = document.querySelector('#opencode-frame');
 const pageTitle = document.querySelector('#page-title');
 const createNav = document.querySelector('#create-nav');
 const toggleButton = document.querySelector('#sidebar-toggle');
@@ -26,6 +26,7 @@ sessionStorage.setItem('agent-sandbox-session', sessionId);
 let selectedId = null;
 let activeId = null;
 let images = [];
+let frameImageId = null;
 
 async function request(url, options = {}) {
   const response = await fetch(url, {headers: {'Content-Type': 'application/json'}, ...options});
@@ -36,6 +37,7 @@ async function request(url, options = {}) {
 
 function sessionBody() { return JSON.stringify({session_id: sessionId}); }
 function imageEndpoint(id, action) { return `/manager/api/images/${encodeURIComponent(id)}/${action}`; }
+function imageResource(id) { return `/manager/api/images/${encodeURIComponent(id)}`; }
 function statusLabel(image) {
   if (image.status === 'connected') return '接続中';
   return image.status === 'running' ? '起動中' : '停止中';
@@ -55,9 +57,22 @@ function setActiveImage(id) {
   if (id) sessionStorage.setItem('agent-sandbox-active-image', id);
   else sessionStorage.removeItem('agent-sandbox-active-image');
 }
-function clearImagePanel() {
-  frame.src = 'about:blank';
+function clearOpenCodeClientState() {
+  if (typeof localStorage !== 'object') return;
+  const prefixes = ['opencode.workspace.', 'opencode.draft.', 'opencode.window.'];
+  for (const key of Object.keys(localStorage)) {
+    if (prefixes.some((prefix) => key.startsWith(prefix))) localStorage.removeItem(key);
+  }
+}
+function resetImageFrame() {
+  const replacement = frame.cloneNode(false);
+  frame.replaceWith(replacement);
+  frame = replacement;
   frame.hidden = true;
+  frameImageId = null;
+}
+function clearImagePanel() {
+  resetImageFrame();
   imageNotice.hidden = true;
   imageNotice.replaceChildren();
 }
@@ -75,10 +90,11 @@ function addAction(container, text, kind, handler, disabled = false) {
   button.className = 'notice-action';
   button.dataset.kind = kind;
   button.textContent = text;
+  button.dataset.idleText = text;
   if (kind === 'start' || kind === 'connect') button.classList.add('primary');
-  if (kind === 'stop') button.classList.add('danger');
+  if (kind === 'stop' || kind === 'delete') button.classList.add('danger');
   button.disabled = disabled;
-  button.addEventListener('click', handler);
+  button.addEventListener('click', () => handler(button));
   container.append(button);
   return button;
 }
@@ -114,9 +130,14 @@ function showImage(image) {
   createView.hidden = true;
   imageView.hidden = false;
   if (image.status === 'connected' && image.connected_by_me && image.url) {
+    if (frameImageId !== image.id) {
+      clearOpenCodeClientState();
+      resetImageFrame();
+      frame.src = image.url;
+      frameImageId = image.id;
+    }
     imageNotice.hidden = true;
     imageNotice.replaceChildren();
-    frame.src = image.url;
     frame.hidden = false;
     setCurrentPage(image.id);
     return;
@@ -126,11 +147,12 @@ function showImage(image) {
   } else if (image.status === 'running') {
     showNotice(image, '起動中です。接続するとメイン画面に作業環境を表示します。', [
       {label: '接続', kind: 'connect', onClick: () => connectImage(image)},
-      {label: '停止', kind: 'stop', onClick: () => runImageAction(image, 'stop')},
+      {label: '停止', kind: 'stop', onClick: (button) => runImageAction(image, 'stop', button)},
     ]);
   } else {
     showNotice(image, '停止中です。起動してから接続できます。', [
-      {label: '起動', kind: 'start', onClick: () => runImageAction(image, 'start')},
+      {label: '起動', kind: 'start', onClick: (button) => runImageAction(image, 'start', button)},
+      {label: '削除', kind: 'delete', onClick: (button) => deleteImage(image, button)},
     ]);
   }
 }
@@ -143,6 +165,30 @@ async function disconnectActive() {
     await request(imageEndpoint(id, 'disconnect'), {method: 'POST', body: sessionBody()});
   } catch (error) {
     console.warn('切断要求を完了できませんでした。', error.message);
+  }
+}
+async function deleteImage(image, button) {
+  if (!window.confirm(`イメージ「${image.id}」を削除しますか？`)) return;
+  if (button) {
+    button.disabled = true;
+    button.setAttribute('aria-busy', 'true');
+    button.textContent = '削除中…';
+  }
+  try {
+    await request(imageResource(image.id), {method: 'DELETE'});
+    if (activeId === image.id) setActiveImage(null);
+    if (selectedId === image.id) {
+      selectedId = null;
+      showCreate();
+    }
+    await refresh();
+  } catch (error) {
+    if (button) {
+      button.disabled = false;
+      button.removeAttribute('aria-busy');
+      button.textContent = button.dataset.idleText || '削除';
+    }
+    window.alert(error.message);
   }
 }
 async function connectImage(image) {
@@ -175,7 +221,11 @@ async function selectImage(image) {
   }
 }
 async function runImageAction(image, action, button) {
-  if (button) { button.disabled = true; button.textContent = action === 'start' ? '起動中…' : '停止中…'; }
+  if (button) {
+    button.disabled = true;
+    button.setAttribute('aria-busy', 'true');
+    button.textContent = action === 'start' ? '起動中…' : '停止中…';
+  }
   try {
     const updated = await request(imageEndpoint(image.id, action), {
       method: 'POST',
@@ -186,7 +236,11 @@ async function runImageAction(image, action, button) {
   } catch (error) {
     formError.textContent = error.message;
     formError.hidden = false;
-    if (button) button.disabled = false;
+    if (button) {
+      button.disabled = false;
+      button.removeAttribute('aria-busy');
+      button.textContent = button.dataset.idleText || (action === 'start' ? '起動' : '停止');
+    }
     window.alert(error.message);
   }
 }
@@ -195,7 +249,8 @@ function actionButton(row, label, kind, image, action, disabled = false) {
   button.type = 'button';
   button.className = 'image-action';
   button.dataset.kind = kind;
-  button.textContent = kind === 'start' ? '▶' : kind === 'stop' ? '■' : kind === 'disconnect' ? '⏏' : '↗';
+  button.textContent = kind === 'start' ? '▶' : kind === 'stop' ? '■' : kind === 'delete' ? '×' : kind === 'disconnect' ? '⏏' : '↗';
+  button.dataset.idleText = button.textContent;
   button.title = label;
   button.setAttribute('aria-label', `${image.id}：${label}`);
   button.disabled = disabled;
@@ -203,8 +258,9 @@ function actionButton(row, label, kind, image, action, disabled = false) {
     event.stopPropagation();
     if (action === 'connect') connectImage(image);
     else if (action === 'open') selectImage(image);
-    else if (activeId && activeId !== image.id) disconnectActive().then(() => runImageAction(image, action));
-    else runImageAction(image, action);
+    else if (action === 'delete') deleteImage(image, button);
+    else if (activeId && activeId !== image.id) disconnectActive().then(() => runImageAction(image, action, button));
+    else runImageAction(image, action, button);
   });
   row.append(button);
 }
@@ -226,6 +282,7 @@ function render(nextImages) {
     const actions = node.querySelector('.image-actions');
     if (image.status === 'stopped') {
       actionButton(actions, '起動', 'start', image, 'start');
+      actionButton(actions, '削除', 'delete', image, 'delete');
     } else if (image.status === 'running') {
       actionButton(actions, '接続', 'connect', image, 'connect');
       actionButton(actions, '停止', 'stop', image, 'stop');
